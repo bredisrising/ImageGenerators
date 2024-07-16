@@ -3,6 +3,11 @@ from torchvision import transforms
 from torch.utils.data import Dataset
 from PIL import Image
 
+car_classes = {
+    1: 'Audi',
+    2: ''
+}
+
 class AllVae(Dataset):
     def __init__(self):
         self.transform = transforms.Compose([transforms.ToTensor()])
@@ -15,7 +20,7 @@ class AllVae(Dataset):
         x = self.transform(x)
         return x
 
-class AllAutoregressionGrayscale24px(Dataset):
+class AudiAutoregressionGrayscale24px(Dataset):
     def __init__(self):
         # grayscale transform but keep 256 range
         self.transform = transforms.Compose([
@@ -25,9 +30,16 @@ class AllAutoregressionGrayscale24px(Dataset):
 
 
     def __len__(self):
-        return 1628
+        return 72 #1628
 
-    def getspecific(self, index, mask):
+    def without_mask(self, index):
+        x = Image.open(f"./data/cars/Audi_processed_24px/{index+1}.jpg")
+        x = self.transform(x)
+        return x.view((1, 24, 24))
+
+        
+
+    def get_specific_mask(self, index, mask):
         # load image
         x = Image.open(f'./data/cars/Audi_processed_24px/{index+1}.jpg')
         x = self.transform(x)
@@ -75,8 +87,6 @@ class AllAutoregressionGrayscale24px(Dataset):
 
         x[0][to_predict[0]:] = 0.0
         #x[0][to_predict[0]] = -1.0
-        
-        x = torch.flatten(x)
 
         # position_to_predict = to_predict[0] / 256.0
 
@@ -85,9 +95,9 @@ class AllAutoregressionGrayscale24px(Dataset):
 
         # x = torch.cat((position_to_predict.unsqueeze(0), x))
 
-        return x, pixel_value
+        return x.view((1, 24, 24)), pixel_value
 
-class AudiAutoregressionColor24px(Dataset):
+class AllAutoregressionColor24px(Dataset):
     def __init__(self):
         # grayscale transform
         self.transform = transforms.Compose([transforms.ToTensor()])
