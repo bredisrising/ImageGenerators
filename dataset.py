@@ -3,9 +3,12 @@ from torchvision import transforms
 from torch.utils.data import Dataset
 from PIL import Image
 
-car_classes = {
-    1: 'Audi',
-    2: ''
+id_to_class = {
+    0: "Audi",
+    1: "Hyundai",
+    2: "Rolls Royce",
+    3: "Swift",
+    4: "Toyota"
 }
 
 class AllVae(Dataset):
@@ -13,10 +16,10 @@ class AllVae(Dataset):
         self.transform = transforms.Compose([transforms.ToTensor()])
     
     def __len__(self):
-        return 5190
+        return 16
     
     def __getitem__(self, index):
-        x = Image.open(f'./data/cars/all_processed_24px/{index+1}.jpg')
+        x = Image.open(f'./data/cars/all_processed_64px/{index+1}.jpg')
         x = self.transform(x)
         return x
 
