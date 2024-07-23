@@ -10,16 +10,28 @@ class BasicAutoencoder(nn.Module):
         self.encoder = nn.Sequential(
             nn.Conv2d(3, 32, 3, padding=1), # 64 
             nn.ReLU(),
-            nn.MaxPool2d(2, 2),
-            nn.Conv2d(32, 64, 3, padding=1),
+            nn.MaxPool2d(2, 2), # 32
+            nn.Conv2d(32, 64, 3, padding=1), 
             nn.ReLU(),
             nn.Conv2d(64, 64, 3, padding=1),
             nn.ReLU(),
-            nn.MaxPool2d(2, 2),
+            nn.MaxPool2d(2, 2), # 16
+            nn.Conv2d(32, 64, 3, padding=1), 
+            nn.ReLU(),
+            nn.Conv2d(64, 64, 3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2), # 8
+            nn.Conv2d(32, 64, 3, padding=1), 
+            nn.ReLU(),
+            nn.Conv2d(64, 64, 3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2), # 4
+
         )
 
         self.decoder = nn.Sequential(
-            # double size 
+            
+
             nn.ConvTranspose2d(3, 3, 2, 2),
         )
 

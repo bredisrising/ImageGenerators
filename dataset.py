@@ -2,6 +2,7 @@ import torch
 from torchvision import transforms
 from torch.utils.data import Dataset
 from PIL import Image
+import pickle
 
 id_to_class = {
     0: "Audi",
@@ -15,13 +16,24 @@ class AllVae(Dataset):
     def __init__(self):
         self.transform = transforms.Compose([transforms.ToTensor()])
     
+        self.index_to_class = pickle.load(open('./data/cars/index_to_class.pkl', 'rb'))
+
     def __len__(self):
-        return 16
+        return 512
     
     def __getitem__(self, index):
-        x = Image.open(f'./data/cars/all_processed_64px/{index+1}.jpg')
+        i = index + 1
+        x = Image.open(f'./data/cars/all_processed_64px/{i}.jpg')
         x = self.transform(x)
-        return x
+        
+        image_class = 0
+        for interval in self.index_to_class:
+            if image_class > interval:
+                image_class += 1
+            else:
+                break
+        
+        return x, image_class
 
 class AudiAutoregressionGrayscale24px(Dataset):
     def __init__(self):
