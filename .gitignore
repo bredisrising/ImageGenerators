@@ -2,6 +2,7 @@
 /data
 /secret
 /trained
+/samples_for_fid
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
