@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 import time
 from torchsummary import summary
 import sys
+from torchvision.transforms import transforms
+
 
 LATENT_DIM = 32
 
@@ -94,8 +96,10 @@ class VariationalAutoencoder(nn.Module):
 def kl_divergence(mean, log_var):
     return -0.5 * torch.sum(1 + log_var - mean.pow(2) - torch.exp(log_var))
 
+
 def ELBO(input_images, generated_image, mus, sigmas):
     return (generated_image - input_images).pow(2).sum(),  kl_divergence(mus, sigmas)
+
 
 def train(dataloader, autoencoder, epochs, optimizer, device, save_interval=25):
     losses = []
@@ -129,6 +133,7 @@ def train(dataloader, autoencoder, epochs, optimizer, device, save_interval=25):
             print(f"{epoch}, {batch_index}, {avg_loss:.6f}, {mse.item():.6f}, {kl.item():.6f}, {means.mean().item()}, {stddevs.mean().item()}", end="\r")
 
             #time.sleep(1.0)
+
 
 def get_z_distribution(autoencoder, data):
     zs = []
@@ -164,7 +169,7 @@ def show_image(autoencoder, num_images_squared=1, latent_vector=None):
             if latent_vector != None:
                 generated = autoencoder.decoder(autoencoder.linear_before_decoder(latent_vector).view(1, 32*4, 8, 8))
             else:
-                generated = autoencoder.decoder(autoencoder.linear_before_decoder(torch.randn((1, 1, LATENT_DIM))).view(1, 32*4, 8, 8))
+                generated = autoencoder.decoder(autoencoder.linear_before_decoder(torch.randn((1, 1, LATENT_DIM))).view(1, 32*autoencoder.multiplier, 8, 8))
             images.append(generated)
 
     fig, axs = plt.subplots(num_images_squared, num_images_squared)
@@ -176,9 +181,33 @@ def show_image(autoencoder, num_images_squared=1, latent_vector=None):
     #plt.savefig("./results/vae32latentdim_256_images.jpg")
     plt.show()
 
+
+def get_fid(autoencoder, data, samples):
+    import inception_metrics
+
+    real = []
+    totensor = transforms.ToTensor()
+    toimage = transforms.ToPILImage()
+    for i in range(samples):
+        real_image = data[i][0]
+        resized = totensor(toimage(real_image).resize((299,299)))
+        real.append(resized)
+
+    fake = []
+    for i in range(samples):
+        latent_vector = torch.randn((1, 1, LATENT_DIM))
+        generated = autoencoder.decoder(autoencoder.linear_before_decoder(latent_vector).view(1, 32*autoencoder.multiplier, 8, 8))
+        #print(generated.shape)
+        fake.append(totensor(toimage(generated.squeeze()).resize((299, 299))))   
+        #fake.append(generated)
+
+    print("done generating images")
+
+    return inception_metrics.frechet_inception_distance(real, fake)
+
+
+
 if __name__ == "__main__":
-
-
     command = sys.argv[1]
     DEVICE = sys.argv[2]
 
@@ -190,14 +219,18 @@ if __name__ == "__main__":
 
     autoencoder = VariationalAutoencoder(6)
     print(summary(autoencoder, (3, 64, 64), device='cpu'))
-    #autoencoder.load_state_dict(torch.load("./trained/variational_autoencoder_higher_kl_bigger_dataset.pth"))
+    autoencoder.load_state_dict(torch.load("./trained/variational_autoencoder_higher_kl_bigger_dataset.pth"))
 
     autoencoder = autoencoder.to(DEVICE)
 
-    optimizer = torch.optim.Adam(autoencoder.parameters(), lr=0.0001)
+    
 
     if command == "generate":
         show_image(autoencoder, 8)
     elif command == "train":
+        optimizer = torch.optim.Adam(autoencoder.parameters(), lr=0.0001)
         train(loader, autoencoder, 10000, optimizer, DEVICE, save_interval=10)
+    elif command == "fid":
+        print("Frechet Inception Distance Score: ", get_fid(autoencoder, data, 256))
+    
     #get_z_distribution(autoencoder, data)

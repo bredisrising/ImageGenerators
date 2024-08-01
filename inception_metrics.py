@@ -25,7 +25,7 @@ def frechet_inception_distance(data_images, generated_images):
         with torch.no_grad():
             real_embeddings.append(inception(data_images[i].unsqueeze(0)))
 
-    
+    print("done generating inception embeddings")
 
     generated_embeddings = torch.stack(generated_embeddings)
     real_embeddings = torch.stack(real_embeddings)
