@@ -19,7 +19,7 @@ class AllVae(Dataset):
         self.index_to_class = pickle.load(open('./data/cars/index_to_class.pkl', 'rb'))
 
     def __len__(self):
-        return 512
+        return 256
     
     def __getitem__(self, index):
         i = index + 1

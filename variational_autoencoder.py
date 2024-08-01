@@ -6,6 +6,7 @@ import dataset
 import matplotlib.pyplot as plt
 import time
 from torchsummary import summary
+import sys
 
 LATENT_DIM = 32
 
@@ -67,11 +68,12 @@ class VariationalAutoencoder(nn.Module):
 
         for sm in self.modules():
             if isinstance(sm, nn.Conv2d) or isinstance(sm, nn.Linear):
-                torch.nn.init.xavier_uniform(sm.weight, gain=1.6)
+                torch.nn.init.xavier_uniform(sm.weight, gain=1.2)
 
     def forward(self, x):
         x = self.encoder(x)
         #print(x[0])
+        #print(x.shape)
         mus = x[:, :LATENT_DIM]
         sigmas = x[:, LATENT_DIM:] # this is log variance
         # log(std**2) = 2 * log(std)
@@ -93,7 +95,7 @@ def kl_divergence(mean, log_var):
     return -0.5 * torch.sum(1 + log_var - mean.pow(2) - torch.exp(log_var))
 
 def ELBO(input_images, generated_image, mus, sigmas):
-    return (generated_image - input_images).pow(2).mean(),  kl_divergence(mus, sigmas)
+    return (generated_image - input_images).pow(2).sum(),  kl_divergence(mus, sigmas)
 
 def train(dataloader, autoencoder, epochs, optimizer, device, save_interval=25):
     losses = []
@@ -101,7 +103,7 @@ def train(dataloader, autoencoder, epochs, optimizer, device, save_interval=25):
     for epoch in range(epochs):
 
         if epoch % save_interval == 0 and epoch != 0:
-            torch.save(autoencoder.state_dict(), "./trained/variational_autoencoder.pth")
+            torch.save(autoencoder.state_dict(), "./trained/variational_autoencoder_higher_kl_bigger_dataset.pth")
 
         for batch_index, batch in enumerate(dataloader):
             input_images = batch[0].to(device)
@@ -112,44 +114,90 @@ def train(dataloader, autoencoder, epochs, optimizer, device, save_interval=25):
             #loss = mse(generated_outputs, input_images  )
             mse, kl = ELBO(input_images, generated_outputs, means, log_vars)
             
-            loss = mse + kl * 0.01
+            loss = mse + kl * 8.0
 
             loss.backward()
             optimizer.step()
+
+            stddevs = torch.exp(0.5 * log_vars)
 
             losses.append(loss.item())
             if len(losses) > 100:
                 losses.pop(0)
             avg_loss = sum(losses) / len(losses)
 
-            print(f"{epoch}, {batch_index}, {avg_loss:.6f}, {mse.item():.6f}, {kl.item():.6f}", end="\r")
+            print(f"{epoch}, {batch_index}, {avg_loss:.6f}, {mse.item():.6f}, {kl.item():.6f}, {means.mean().item()}, {stddevs.mean().item()}", end="\r")
 
             #time.sleep(1.0)
 
-def show_image(autoencoder):
-    with torch.no_grad():
-        generated = autoencoder.decoder(autoencoder.linear_before_decoder(torch.randn((1, 1, LATENT_DIM))).view(1, 32*4, 8, 8))
+def get_z_distribution(autoencoder, data):
+    zs = []
+
+    SAMPLES = 64
     
-    print(generated.shape)
-    plt.imshow(generated.squeeze().permute(1,2,0).numpy())
+    for i in range(SAMPLES):
+        with torch.no_grad():
+            image = data[i]
+            #print(i, image[0].shape)
+            #latent_vectors.append(autoencoder(image[0].unsqueeze(0)))
+            z = autoencoder.encoder(image[0].unsqueeze(0))
+        zs.append(z)
+
+    zs = torch.stack(zs).squeeze()
+    #print(zs.shape)
+    means = zs[:, LATENT_DIM:]
+    stddevs = torch.exp(0.5*zs[:, :LATENT_DIM])
+
+    print(means, stddevs)
+    print('\n\n')
+    print(means.mean(), stddevs.mean())
+
+    return means, stddevs
+
+
+def show_image(autoencoder, num_images_squared=1, latent_vector=None):
+    images = []
+
+    for i in range(num_images_squared**2):
+        print(i/(num_images_squared**2)*100, '%', end='\r')
+        with torch.no_grad():
+            if latent_vector != None:
+                generated = autoencoder.decoder(autoencoder.linear_before_decoder(latent_vector).view(1, 32*4, 8, 8))
+            else:
+                generated = autoencoder.decoder(autoencoder.linear_before_decoder(torch.randn((1, 1, LATENT_DIM))).view(1, 32*4, 8, 8))
+            images.append(generated)
+
+    fig, axs = plt.subplots(num_images_squared, num_images_squared)
+
+    for i in range(num_images_squared):
+        for j in range(num_images_squared):
+            axs[i][j].imshow(images[i*num_images_squared+j].squeeze().permute(1,2,0).numpy())
+
+    #plt.savefig("./results/vae32latentdim_256_images.jpg")
     plt.show()
 
 if __name__ == "__main__":
-    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-    #DEVICE = 'cpu'
+
+
+    command = sys.argv[1]
+    DEVICE = sys.argv[2]
+
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
 
     data = dataset.AllVae()
     loader = DataLoader(data, batch_size=16, shuffle=True)
 
-    autoencoder = VariationalAutoencoder(4)
+    autoencoder = VariationalAutoencoder(6)
     print(summary(autoencoder, (3, 64, 64), device='cpu'))
-   # autoencoder.load_state_dict(torch.load("./trained/variational_autoencoder.pth"))
+    #autoencoder.load_state_dict(torch.load("./trained/variational_autoencoder_higher_kl_bigger_dataset.pth"))
 
     autoencoder = autoencoder.to(DEVICE)
 
     optimizer = torch.optim.Adam(autoencoder.parameters(), lr=0.0001)
 
-    #show_image(autoencoder)
-    train(loader, autoencoder, 100000, optimizer, DEVICE, save_interval=10)
-
-
+    if command == "generate":
+        show_image(autoencoder, 8)
+    elif command == "train":
+        train(loader, autoencoder, 10000, optimizer, DEVICE, save_interval=10)
+    #get_z_distribution(autoencoder, data)
