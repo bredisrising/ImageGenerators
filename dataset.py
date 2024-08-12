@@ -12,6 +12,41 @@ id_to_class = {
     4: "Toyota"
 }
 
+def compute_alpha_t(t, max_timesteps):
+    if t == max_timesteps: 
+        return torch.tensor(0, dtype=torch.float32)
+
+    cumulative = 1
+    for i in range(1, t+1):
+        cumulative *= torch.cos(torch.pi / 2 * torch.tensor(i) / max_timesteps)
+    return cumulative
+
+class Diffusion(Dataset):
+    def __init__(self, max_timesteps):
+        self.transform = transforms.Compose([transforms.ToTensor()])    
+        self.index_to_class = pickle.load(open('./data/cars/index_to_class.pkl', 'rb'))
+        self.max_timesteps = max_timesteps
+
+    def __len__(self):
+        return 256
+
+    def __getitem__(self, index):
+        i = index + 1
+        x = Image.open(f'./data/cars/all_processed_64px/{i}.jpg')
+        x = self.transform(x) * 2.0 - 1.0
+
+        timestep = torch.randint(1, self.max_timesteps+1, (1,))
+
+        alpha_t = compute_alpha_t(1, self.max_timesteps)
+
+        raw_noise = torch.randn_like(x)
+        raw_noise = torch.clamp(raw_noise, torch.tensor(-1.0), torch.tensor(1.0))
+
+        x = torch.sqrt(alpha_t) * x + torch.sqrt(1 - alpha_t) * raw_noise
+
+        return x, raw_noise, timestep.item()
+
+
 class AllVae(Dataset):
     def __init__(self):
         self.transform = transforms.Compose([transforms.ToTensor()])
