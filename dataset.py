@@ -37,14 +37,14 @@ class Diffusion(Dataset):
 
         timestep = torch.randint(1, self.max_timesteps+1, (1,))
 
-        alpha_t = compute_alpha_t(1, self.max_timesteps)
+        alpha_t = compute_alpha_t(timestep, self.max_timesteps)
 
         raw_noise = torch.randn_like(x)
-        raw_noise = torch.clamp(raw_noise, torch.tensor(-1.0), torch.tensor(1.0))
+        #raw_noise = torch.clamp(raw_noise, torch.tensor(-1.0), torch.tensor(1.0))
 
-        x = torch.sqrt(alpha_t) * x + torch.sqrt(1 - alpha_t) * raw_noise
+        x = alpha_t * x + (1 - alpha_t) * raw_noise
 
-        return x, raw_noise, timestep.item()
+        return x, raw_noise, timestep.to(torch.float32)
 
 
 class AllVae(Dataset):
