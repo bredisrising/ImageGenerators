@@ -3,11 +3,11 @@ from torchvision import transforms
 from torch.utils.data import Dataset
 from PIL import Image
 import pickle
-
+from diffusion import cosine_schedule
 id_to_class = {
     0: "Audi",
     1: "Hyundai",
-    2: "Rolls Royce",
+    2: "ARolls Royce",
     3: "Swift",
     4: "Toyota"
 }
@@ -21,30 +21,129 @@ def compute_alpha_t(t, max_timesteps):
         cumulative *= torch.cos(torch.pi / 2 * torch.tensor(i) / max_timesteps)
     return cumulative
 
+class Diffusion32(Dataset):
+    def __init__(self, max_timesteps):
+        self.transform = transforms.Compose([transforms.ToTensor()])    
+        self.index_to_class = pickle.load(open('./data/cars/index_to_class.pkl', 'rb'))
+        self.max_timesteps = max_timesteps
+
+
+        self.images = []
+        for i in range(len(self)):
+            index = i + 1
+            x = Image.open(f'./data/cars/all_processed_32px/{index}.jpg')
+            x = self.transform(x) * 2.0 - 1.0
+            self.images.append(x)
+
+
+        # self.timestep_to_at = {}
+
+        # for timestep in range(1, max_timesteps+1):
+        #     at = compute_alpha_t(timestep, max_timesteps)
+        #     self.timestep_to_at[timestep] = at
+
+        # print("DONE PRECOMPUTING AT")
+
+    def __len__(self):
+        return 256
+
+    def get_specific_timestep(self, index, timestep):
+        i = index + 1
+        x = Image.open(f'./data/cars/all_processed_32px/{i}.jpg')
+        x = self.transform(x) * 2.0 - 1.0
+
+        cum_alpha_t, beta_t = cosine_schedule(torch.tensor(timestep, dtype=torch.float32), torch.tensor(self.max_timesteps, dtype=torch.float32))
+
+        raw_noise = torch.randn_like(x)
+        raw_noise = torch.clamp(raw_noise, torch.tensor(-1.0), torch.tensor(1.0))
+
+        x = torch.sqrt(cum_alpha_t) * x + torch.sqrt(1 - cum_alpha_t) * raw_noise
+
+        #x = torch.clamp(x, torch.tensor(-1.0), torch.tensor(1.0))
+
+        return x, raw_noise, timestep
+
+    def __getitem__(self, index):
+        x = self.images[index]
+
+        timestep = torch.randint(1, self.max_timesteps+1, (1,))
+        #timestep = torch.randint(40, 50, (1,))
+
+        #alpha_t = self.timestep_to_at[timestep.item()]
+        #alpha_t = compute_alpha_t(timestep, self.max_timesteps)
+
+        cum_alpha_t, beta_t = cosine_schedule(timestep, torch.tensor(self.max_timesteps, dtype=torch.float32))
+
+        raw_noise = torch.randn_like(x)
+        #raw_noise = torch.clamp(raw_noise, torch.tensor(-1.0), torch.tensor(1.0))
+
+        x = torch.sqrt(cum_alpha_t) * x + torch.sqrt(1 - cum_alpha_t) * raw_noise
+
+        #x = torch.clamp(x, torch.tensor(-1.0), torch.tensor(1.0))
+
+        return x, raw_noise, timestep
+
 class Diffusion(Dataset):
     def __init__(self, max_timesteps):
         self.transform = transforms.Compose([transforms.ToTensor()])    
         self.index_to_class = pickle.load(open('./data/cars/index_to_class.pkl', 'rb'))
         self.max_timesteps = max_timesteps
 
-    def __len__(self):
-        return 256
 
-    def __getitem__(self, index):
+        self.images = []
+        for i in range(len(self)):
+            index = i + 1
+            x = Image.open(f'./data/cars/all_processed_64px/{index}.jpg')
+            x = self.transform(x) * 2.0 - 1.0
+            self.images.append(x)
+
+
+        # self.timestep_to_at = {}
+
+        # for timestep in range(1, max_timesteps+1):
+        #     at = compute_alpha_t(timestep, max_timesteps)
+        #     self.timestep_to_at[timestep] = at
+
+        # print("DONE PRECOMPUTING AT")
+
+    def __len__(self):
+        return 64
+
+    def get_specific_timestep(self, index, timestep):
         i = index + 1
         x = Image.open(f'./data/cars/all_processed_64px/{i}.jpg')
         x = self.transform(x) * 2.0 - 1.0
 
-        timestep = torch.randint(1, self.max_timesteps+1, (1,))
+        cum_alpha_t, beta_t = cosine_schedule(torch.tensor(timestep, dtype=torch.float32), torch.tensor(self.max_timesteps, dtype=torch.float32))
 
-        alpha_t = compute_alpha_t(timestep, self.max_timesteps)
+        raw_noise = torch.randn_like(x)
+        raw_noise = torch.clamp(raw_noise, torch.tensor(-1.0), torch.tensor(1.0))
+
+        x = torch.sqrt(cum_alpha_t) * x + torch.sqrt(1 - cum_alpha_t) * raw_noise
+
+        #x = torch.clamp(x, torch.tensor(-1.0), torch.tensor(1.0))
+
+        return x, raw_noise, timestep
+
+    def __getitem__(self, index):
+        x = self.images[index]
+
+        timestep = torch.randint(1, self.max_timesteps+1, (1,))
+        #timestep = torch.randint(40, 50, (1,))
+
+        #alpha_t = self.timestep_to_at[timestep.item()]
+        #alpha_t = compute_alpha_t(timestep, self.max_timesteps)
+
+        cum_alpha_t, beta_t = cosine_schedule(timestep, torch.tensor(self.max_timesteps, dtype=torch.float32))
 
         raw_noise = torch.randn_like(x)
         #raw_noise = torch.clamp(raw_noise, torch.tensor(-1.0), torch.tensor(1.0))
 
-        x = alpha_t * x + (1 - alpha_t) * raw_noise
+        x = torch.sqrt(cum_alpha_t) * x + torch.sqrt(1 - cum_alpha_t) * raw_noise
 
-        return x, raw_noise, timestep.to(torch.float32)
+        #x = torch.clamp(x, torch.tensor(-1.0), torch.tensor(1.0))
+
+        return x, raw_noise, timestep
 
 
 class AllVae(Dataset):
