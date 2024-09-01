@@ -10,8 +10,9 @@ from PIL import Image
 from torchvision.transforms import ToPILImage
 import time
 
-TRAIN_TIMESTEPS = 75
-INFERENCE_TIMESTEPS = 75
+TRAIN_TIMESTEPS = 50
+INFERENCE_TIMESTEPS = 50
+SAVEPATH = "./trained/diffusion_small32.pth"
 
 def cosine_schedule(timestep, max_timesteps):
     cum_at_timestep = torch.cos(timestep / max_timesteps * torch.pi / 2).pow(2)
@@ -28,17 +29,6 @@ def precompute_terms():
     alpha_t = 1 - linear_beta_schedule(TRAIN_TIMESTEPS)
     cumulative_alpha_t = torch.cumprod(alpha_t, dim=0)
 
-
-# def sinusoidal_embedding(timesteps, embedding_dim):
-#     #tensor_timesteps = torch.tensor(timesteps, dtype=torch.float32).unsqueeze(1)
-#     half_dim = embedding_dim // 2
-#     emb = 10000 ** (2 * torch.arange(half_dim) / (half_dim - 1))
-#     emb = emb.to('cuda')
-#     #print(tensor_timesteps, emb)
-#     emb = timesteps / emb
-#     emb = torch.cat((torch.sin(emb), torch.cos(emb)), dim=-1)
-
-#     return emb
 
 def sinusoidal_embedding(timesteps, embedding_dim):
     pe = torch.zeros((timesteps.shape[0], embedding_dim)).to('cuda')
@@ -170,28 +160,13 @@ def train(dataloader, denoiser, epochs, optimizer, lr_scheduler, device, save_in
     for epoch in range(epochs):
 
         if epoch % save_interval == 0 and epoch != 0:
-            torch.save(denoiser.state_dict(), "./trained/diffusion.pth")
+            torch.save(denoiser.state_dict(), SAVEPATH)
 
         for batch_index, batch in enumerate(dataloader):
 
             corrupted, noise, timesteps = batch
-            corrupted = corrupted.to(device)
-            noise = noise.to(device)
-            timesteps = timesteps.to(device)
 
-            #print(timesteps.shape)
-
-            input_images = batch[0].to(device)
-            # print(input_images[0].shape)
-
-            predicted_noise = denoiser(input_images, timesteps)
-            #one = predicted_noise[0]
-            # print(one.shape)
-            #print(one.max().item(), one.min().item(), one.mean().item(), one.var().item())
-
-            # if epoch % 50 == 0:
-            #     plt.imshow(predicted_noise[0].cpu().detach().permute(1,2,0))
-            #     plt.show()
+            predicted_noise = denoiser(corrupted, timesteps)
 
             optimizer.zero_grad()
 
@@ -212,7 +187,7 @@ def train(dataloader, denoiser, epochs, optimizer, lr_scheduler, device, save_in
 
         #lr_scheduler.step(avg_loss)
 
-        if epoch % 50 == 0:
+        if epoch % 1000 == 0:
             image = eval(denoiser, False)
             #print(image.shape)
             image = topilimage(image.squeeze())
@@ -227,18 +202,16 @@ def eval(denoiser, show=False):
         timestep = torch.tensor(i).to('cuda').unsqueeze(0)
         with torch.no_grad():
             predicted_noise = denoiser(image, timestep)
-            #print(predicted_noise)
         
-        #predicted_noise = torch.clamp(predicted_noise, -1.0, 1.0)
         cum_at, bt = cosine_schedule(timestep, inference_timesteps_tensor)
 
         image = (image - bt/torch.sqrt(1-cum_at)*predicted_noise) / torch.sqrt(1-bt) 
         if i > 1:
             image = image + torch.randn_like(image)*torch.sqrt(bt)
-        #image = torch.clamp(image, -1.0, 1.0)
+
         pilimage = topilimage(image.clamp(-1.0,1.0).to("cpu").squeeze() / 2.0 + .5)
         pilimage.save(f"./results/{i}timestep_diffused.png")
-        #print(bt, torch.sqrt(bt))
+
         if show:
             plt.imshow(image.to('cpu').squeeze().permute(1,2,0))
             plt.show()
@@ -248,33 +221,71 @@ def eval(denoiser, show=False):
     image = image / 2.0 + 0.5
     image = torch.clamp(image, 0.0, 1.0)
 
-    #print(image)
-    #print(image, image.dtype)
     return image.to('cpu')
 
+def generate(denoiser, num_images = 1):
+    topilimage = ToPILImage()
+    
+    inference_timesteps_tensor = torch.tensor(INFERENCE_TIMESTEPS, dtype=torch.float32)
+
+    acc_num_images = num_images ** 2
+    images = []
+    for img in range(acc_num_images):
+        image = torch.randn((1, 3, 32, 32)).to('cuda')
+        for i in range(INFERENCE_TIMESTEPS-1, 0, -1):
+            timestep = torch.tensor(i).to('cuda').unsqueeze(0)
+            with torch.no_grad():
+                predicted_noise = denoiser(image, timestep)
+            
+            #predicted_noise = torch.clamp(predicted_noise, -1.0, 1.0)
+            cum_at, bt = cosine_schedule(timestep, inference_timesteps_tensor)
+
+            image = (image - bt/torch.sqrt(1-cum_at)*predicted_noise) / torch.sqrt(1-bt) 
+            if i > 1:
+                image = image + torch.randn_like(image)*torch.sqrt(bt)
+
+            #pilimage = topilimage(image.clamp(-1.0,1.0).to("cpu").squeeze() / 2.0 + .5)
+            #pilimage.save(f"./results/{i}timestep_diffused.png")
+
+        images.append(image.clamp(-1.0, 1.0).to("cpu").squeeze().permute(1,2,0) / 2.0 + .5)
+        print(img, end="\r")
+
+    fig, axs = plt.subplots(num_images, num_images)
+
+    for i in range(num_images):
+        for j in range(num_images):
+            axs[i][j].imshow(images[i*num_images+j])
+    plt.show()
+
+
 if __name__ == "__main__":
+
     command = sys.argv[1]
     DEVICE = sys.argv[2]
 
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
 
-    data = dataset.Diffusion32(TRAIN_TIMESTEPS)
-    loader = DataLoader(data, batch_size=16)
 
-    denoiser = UNetNoisePredictor(12)
+
+    denoiser = UNetNoisePredictor(9)
     #print(summary(denoiser, (3, 64, 64), device='cpu'))
-    denoiser.load_state_dict(torch.load("./trained/diffusion.pth"))
+    #denoiser.load_state_dict(torch.load(SAVEPATH))
 
     denoiser = denoiser.to(DEVICE)
 
     if command == "generate":
-        pass
+        generate(denoiser, 4)
         #show_image(autoencoder, 8)
     elif command == "train":
-        optimizer = torch.optim.Adam(denoiser.parameters(), lr=0.00002)
+        diffusion_dataset = dataset.Diffusion32(TRAIN_TIMESTEPS, device='cuda')
+        loader = DataLoader(diffusion_dataset, batch_size=64)
+        
+        optimizer = torch.optim.Adam(denoiser.parameters(), lr=0.0001)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10)
         train(loader, denoiser, 10000000, optimizer, scheduler, DEVICE, save_interval=20)
+    
+    
     elif command == "fid":
         pass
         #print("Frechet Inception Distance Score: ", get_fid(autoencoder, data, 256))

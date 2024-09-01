@@ -5,8 +5,9 @@ import numpy as np
 
 frames = []
 
+SCALE_UP = 10
 
-for i in range(73, 0, -1):
+for i in range(74, 0, -1):
     frame = Image.open(f"./results/{i}timestep_diffused.png")
     frame = np.array(frame)
 
@@ -14,9 +15,9 @@ for i in range(73, 0, -1):
     b = frame[:, :, 1]
     c = frame[:, :, 2]
 
-    a = np.kron(a, np.ones((20, 20)))
-    b = np.kron(b, np.ones((20, 20)))
-    c = np.kron(c, np.ones((20, 20)))
+    a = np.kron(a, np.ones((SCALE_UP, SCALE_UP)))
+    b = np.kron(b, np.ones((SCALE_UP, SCALE_UP)))
+    c = np.kron(c, np.ones((SCALE_UP, SCALE_UP)))
 
     a = np.expand_dims(a, axis=-1)
     b = np.expand_dims(b, axis=-1)
@@ -31,4 +32,7 @@ for i in range(73, 0, -1):
 
     frames.append(imageio.imread(f"./results/{i}timestep_diffused.png"))
 
-imageio.mimsave('diffusion.gif', frames, duration=1.0, loop=0)
+for i in range(40):
+    frames.append(imageio.imread(f"./results/{1}timestep_diffused.png"))
+
+imageio.mimsave('diffusion4.gif', frames, duration=2.0, loop=0)

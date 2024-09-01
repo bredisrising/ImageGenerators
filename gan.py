@@ -10,34 +10,42 @@ import sys
 from torchvision.transforms import transforms
 
 
-LATENT_DIM = 32
+LATENT_DIM = 16
+BATCH_SIZE = 32
+
+EVAL_LATENT_VECTOR = torch.randn((1, 1, LATENT_DIM)).to("cuda")
+
 
 class GenerativeAdversarialNetwork(nn.Module):
     def __init__(self, multiplier):
         super().__init__()
         self.multiplier = multiplier
+        self.critic_multiplier = 2
 
         self.discriminator = nn.Sequential(
-            nn.Conv2d(3, 32*multiplier, 3, 1, 1),  # 64
+            nn.Conv2d(3, 24*self.critic_multiplier, 3, 1, 1),  # 64
             nn.LeakyReLU(),
-            nn.Conv2d(32*multiplier, 32*multiplier, 3, 1, 1),  
+            nn.Conv2d(24*self.critic_multiplier, 24*self.critic_multiplier, 3, 1, 1),  
             nn.LeakyReLU(),
             nn.MaxPool2d(2, 2), # 32
-            nn.Conv2d(32*multiplier, 64*multiplier, 3, 1, 1),  
+            nn.Conv2d(24*self.critic_multiplier, 48*self.critic_multiplier, 3, 1, 1),  
             nn.LeakyReLU(),
             nn.MaxPool2d(2, 2), # 16
-            nn.Conv2d(64*multiplier, 64*multiplier, 3, 1, 1),  
+            nn.Conv2d(48*self.critic_multiplier, 48*self.critic_multiplier, 3, 1, 1),  
             nn.LeakyReLU(),
             nn.MaxPool2d(2, 2), # 8
-            nn.Conv2d(64*multiplier, 32*multiplier, 3, 1, 1),  
+            nn.Conv2d(48*self.critic_multiplier, 24*self.critic_multiplier, 3, 1, 1),  
             nn.LeakyReLU(),
-            nn.Conv2d(32*multiplier, 32*multiplier, 3, 1, 1),  # 8
+            nn.Conv2d(24*self.critic_multiplier, 24*self.critic_multiplier, 3, 1, 1),  # 8
             nn.Flatten(),
-            nn.Linear(32*multiplier*8*8, 1),
+            nn.Linear(24*self.critic_multiplier*8*8, 1),
+        )
+
+        self.latent_to_linear = nn.Sequential(
+            nn.Linear(LATENT_DIM, 32*multiplier*8*8)
         )
 
         self.generator = nn.Sequential(
-            nn.Linear(LATENT_DIM, 32*multiplier*8*8),
             nn.Conv2d(32*multiplier, 32*multiplier, 3, 1, 1),
             nn.LeakyReLU(),
             nn.Conv2d(32*multiplier, 32*multiplier, 3, 1, 1),
@@ -65,84 +73,107 @@ class GenerativeAdversarialNetwork(nn.Module):
             nn.Sigmoid(),
         )
 
-        for sm in self.modules():
-            if isinstance(sm, nn.Conv2d) or isinstance(sm, nn.Linear):
-                torch.nn.init.xavier_uniform(sm.weight)
-
     def forward(self, x):
         pass
 
+def compute_gradient_penalty(critic, real_samples, fake_samples, device, reg_weight=1):
+    interpolation_parameter = torch.rand(real_samples.size(0), 1, 1, 1).to(device)
+    interpolated = (interpolation_parameter * real_samples + (1 - interpolation_parameter) * fake_samples).requires_grad_(True)
 
+    interpolated_scores = critic(interpolated)
 
-def train(dataloader, autoencoder, epochs, optimizer, device, save_interval=25):
+    gradient = torch.autograd.grad(
+        outputs=interpolated_scores,
+        inputs=interpolated,
+        grad_outputs=torch.ones_like(interpolated_scores),
+        create_graph=True,
+        retain_graph=True,
+    )[0]
+
+    gradient = gradient.view(gradient.size(0), -1)
+    grad_norm = torch.sqrt(torch.sum(gradient ** 2, dim=1) + 1e-12)
+
+    gp = reg_weight * ((grad_norm - 1) ** 2).mean()
+
+    return gp
+
+def train(dataloader, gan, epochs, critic_optimizer, generator_optimizer, device, save_interval=25):
+    counter = 1
+
     losses = []
 
-    for epoch in range(epochs):
+    generator_loss = torch.tensor(0.)
 
+    for epoch in range(epochs):
         if epoch % save_interval == 0 and epoch != 0:
-            torch.save(autoencoder.state_dict(), "./trained/wgan.pth")
+            torch.save(gan.state_dict(), "./trained/wgan.pth")
 
         for batch_index, batch in enumerate(dataloader):
-            input_images = batch[0].to(device)
+            real_images = batch[0].to(device)
 
-            generated_outputs, means, log_vars = autoencoder(input_images)
+            latent_input_vector = torch.randn((BATCH_SIZE, 1, LATENT_DIM)).to(device)
+            latent_input_vector = gan.latent_to_linear(latent_input_vector)
+            #print(latent_input_vector.shape)
+            latent_input_vector = latent_input_vector.view(BATCH_SIZE, 32*gan.multiplier, 8, 8)
 
-            optimizer.zero_grad()
-            #loss = mse(generated_outputs, input_images  )
-            #mse, kl = ELBO(input_images, generated_outputs, means, log_vars)
+            fake_generated = gan.generator(latent_input_vector)
+
+            real_score = gan.discriminator(real_images)
+            fake_score = gan.discriminator(fake_generated.detach())
+
+            critic_optimizer.zero_grad()
+
+            discriminator_loss = -torch.mean(torch.log(torch.sigmoid(real_score - fake_score.mean())+1e-5)) - torch.mean(torch.log(1 - torch.sigmoid(fake_score - real_score.mean())+1e-5)) 
+            discriminator_loss += compute_gradient_penalty(gan.discriminator, real_images, fake_generated.detach(), device, 10)
+            discriminator_loss.backward()
+            torch.nn.utils.clip_grad_norm_(gan.discriminator.parameters(), max_norm=1.0)
+            critic_optimizer.step()
+
+            if counter % 4 == 0:
+                generator_optimizer.zero_grad()
+                generator_fake_score = gan.discriminator(fake_generated)
+                generator_loss = -torch.mean(torch.log(torch.sigmoid(generator_fake_score - real_score.mean().detach())+1e-5)) - torch.mean(torch.log(1 - torch.sigmoid(real_score.detach() - generator_fake_score.mean())+1e-5))
+                generator_loss.backward()
+                #torch.nn.utils.clip_grad_norm_(gan.generator.parameters(), max_norm=1.0)
+                generator_optimizer.step()
+                #eval(gan.generator)
             
-            #loss = mse + kl * 8.0
+            counter += 1
 
-            loss.backward()
-            optimizer.step()
-
-            stddevs = torch.exp(0.5 * log_vars)
-
-            losses.append(loss.item())
+            losses.append(discriminator_loss.item())
             if len(losses) > 100:
                 losses.pop(0)
             avg_loss = sum(losses) / len(losses)
 
-            print(f"{epoch}, {batch_index}, {avg_loss:.6f}, {mse.item():.6f}, {kl.item():.6f}, {means.mean().item()}, {stddevs.mean().item()}", end="\r")
+            print(f"{epoch}, {batch_index}, Gen Loss: {generator_loss.item()} Critic Loss: {avg_loss:.6f}  Real Score: {real_score.mean()}  Fake Score: {fake_score.mean()}", end="\r")
 
-            #time.sleep(1.0)
+        eval(gan.generator)
 
+def eval(generator):
+    topilimage = transforms.ToPILImage()
+    latent_input_vector = torch.randn((1, 1, LATENT_DIM)).to("cuda")
+    latent_input_vector = gan.latent_to_linear(latent_input_vector)
+    #print(latent_input_vector.shape)
+    latent_input_vector = latent_input_vector.view(1, 32*gan.multiplier, 8, 8)
 
-def get_z_distribution(autoencoder, data):
-    zs = []
+    with torch.no_grad():
+        fake_generated = generator(latent_input_vector)
 
-    SAMPLES = 64
-    
-    for i in range(SAMPLES):
-        with torch.no_grad():
-            image = data[i]
-            #print(i, image[0].shape)
-            #latent_vectors.append(autoencoder(image[0].unsqueeze(0)))
-            z = autoencoder.encoder(image[0].unsqueeze(0))
-        zs.append(z)
-
-    zs = torch.stack(zs).squeeze()
-    #print(zs.shape)
-    means = zs[:, LATENT_DIM:]
-    stddevs = torch.exp(0.5*zs[:, :LATENT_DIM])
-
-    print(means, stddevs)
-    print('\n\n')
-    print(means.mean(), stddevs.mean())
-
-    return means, stddevs
+    image = topilimage(fake_generated.cpu().squeeze())
+    image.save("./gan.png")
 
 
-def show_image(autoencoder, num_images_squared=1, latent_vector=None):
+
+def show_image(gan, num_images_squared=1, latent_vector=None):
     images = []
 
     for i in range(num_images_squared**2):
         print(i/(num_images_squared**2)*100, '%', end='\r')
         with torch.no_grad():
             if latent_vector != None:
-                generated = autoencoder.decoder(autoencoder.linear_before_decoder(latent_vector).view(1, 32*4, 8, 8))
+                generated = gan.decoder(gan.linear_before_decoder(latent_vector).view(1, 32*4, 8, 8))
             else:
-                generated = autoencoder.decoder(autoencoder.linear_before_decoder(torch.randn((1, 1, LATENT_DIM))).view(1, 32*autoencoder.multiplier, 8, 8))
+                generated = gan.decoder(gan.linear_before_decoder(torch.randn((1, 1, LATENT_DIM))).view(1, 32*gan.multiplier, 8, 8))
             images.append(generated)
 
     fig, axs = plt.subplots(num_images_squared, num_images_squared)
@@ -155,7 +186,7 @@ def show_image(autoencoder, num_images_squared=1, latent_vector=None):
     plt.show()
 
 
-def get_fid(autoencoder, data, samples):
+def get_fid(gan, data, samples):
     import inception_metrics
 
     real = []
@@ -169,7 +200,7 @@ def get_fid(autoencoder, data, samples):
     fake = []
     for i in range(samples):
         latent_vector = torch.randn((1, 1, LATENT_DIM))
-        generated = autoencoder.generator(autoencoder.linear_before_decoder(latent_vector).view(1, 32*autoencoder.multiplier, 8, 8))
+        generated = gan.generator(gan.linear_before_decoder(latent_vector).view(1, 32*gan.multiplier, 8, 8))
         #print(generated.shape)
         fake.append(totensor(toimage(generated.squeeze()).resize((299, 299))))   
         #fake.append(generated)
@@ -188,22 +219,24 @@ if __name__ == "__main__":
     torch.backends.cudnn.allow_tf32 = True
 
     data = dataset.AllVae()
-    loader = DataLoader(data, batch_size=16, shuffle=True)
+    loader = DataLoader(data, batch_size=BATCH_SIZE, shuffle=True)
 
-    gan = GenerativeAdversarialNetwork(6)
-    print(summary(gan, (3, 64, 64), device='cpu'))
+    gan = GenerativeAdversarialNetwork(2)
+    print(summary(gan.discriminator, (3, 64, 64), device='cpu'))
     gan.load_state_dict(torch.load("./trained/wgan.pth"))
 
     gan = gan.to(DEVICE)
 
-    
-
     if command == "generate":
         show_image(gan, 8)
     elif command == "train":
-        optimizer = torch.optim.Adam(gan.parameters(), lr=0.0001)
-        train(loader, gan, 10000, optimizer, DEVICE, save_interval=10)
+        # critic_optimizer = torch.optim.RMSprop(gan.discriminator.parameters(), lr=0.001)
+        # generator_optimizer = torch.optim.RMSprop(gan.generator.parameters(), lr=0.001)
+        critic_optimizer = torch.optim.Adam(gan.discriminator.parameters(), lr=0.0000001, betas = (.5, .9))
+        generator_optimizer = torch.optim.Adam(gan.generator.parameters(), lr=0.0000001, betas=(.5, .9))
+
+        train(loader, gan, 100000, critic_optimizer, generator_optimizer, DEVICE, save_interval=10)
     elif command == "fid":
         print("Frechet Inception Distance Score: ", get_fid(gan, data, 256))
     
-    #get_z_distribution(gan.generator, data)
+    #get_z_distribution(gan.generator, data)``
